@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>PhotoEnhance — 推し写真高画質化</title>
+<style>
+  :root {
+    --bg: #0e0e14;
+    --panel: #1a1a24;
+    --panel2: #232330;
+    --text: #e8e8f0;
+    --sub: #9a9ab0;
+    --accent: #ff6ec7;
+    --accent2: #6ec7ff;
+    --border: #2a2a3a;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+    overscroll-behavior: none;
+  }
+  body { min-height: 100vh; display: flex; flex-direction: column; }
+
+  header {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    background: linear-gradient(90deg, rgba(255,110,199,0.08), rgba(110,199,255,0.08));
+    flex-shrink: 0;
+  }
+  header h1 {
+    margin: 0; font-size: 16px; font-weight: 600;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  header .sub { font-size: 11px; color: var(--sub); }
+
+  main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+  /* ===== Canvas Area ===== */
+  .canvas-area {
+    flex: 1; min-height: 260px;
+    display: flex; align-items: center; justify-content: center;
+    background: #050508;
+    position: relative; overflow: hidden;
+    border-bottom: 1px solid var(--border);
+    transition: border-color 0.15s;
+  }
+  .canvas-area.drag-over {
+    border: 2px dashed var(--accent);
+    background: rgba(255,110,199,0.05);
+  }
+  .canvas-area.drag-over::after {
+    content: '画像をドロップ ✨';
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; font-weight: 600; color: var(--accent);
+    background: rgba(14,14,20,0.8);
+    z-index: 20; /* processing-overlay(10)・compare-slider(5)より手前 */
+  }
+
+  .canvas-wrap {
+    position: relative;
+    max-width: 100%; max-height: 100%;
+    display: flex; align-items: center; justify-content: center;
+  }
+  canvas {
+    max-width: 100%; max-height: 58vh;
+    display: block;
+    border-radius: 6px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.6);
+  }
+
+  /* ===== Placeholder ===== */
+  .placeholder {
+    text-align: center; color: var(--sub); padding: 40px 20px;
+    pointer-events: none;
+  }
+  .placeholder .ico { font-size: 52px; margin-bottom: 12px; display: block; }
+  .placeholder b { color: var(--text); display: block; font-size: 16px; margin-bottom: 8px; }
+  .placeholder .hints { font-size: 12px; line-height: 1.8; }
+  .placeholder .hint-chip {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    background: var(--panel2); border: 1px solid var(--border);
+    margin: 2px; font-size: 11px; color: var(--sub);
+  }
+
+  /* ===== Processing overlay ===== */
+  .processing-overlay {
+    position: absolute; inset: 0;
+    background: rgba(5,5,8,0.75);
+    flex-direction: column;
+    align-items: center; justify-content: center;
+    z-index: 10;
+    display: none; /* .active で上書き */
+  }
+  .processing-overlay.active { display: flex; }
+  .spinner {
+    width: 36px; height: 36px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    margin-bottom: 10px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .processing-label { font-size: 12px; color: var(--sub); }
+
+  /* ===== Before/After ===== */
+  .compare-slider {
+    position: absolute; top: 0; bottom: 0;
+    width: 2px; background: white;
+    box-shadow: 0 0 8px rgba(255,255,255,0.6);
+    cursor: ew-resize; z-index: 5;
+    display: none;
+  }
+  .compare-slider::before {
+    content: ''; position: absolute;
+    top: 50%; left: 50%; transform: translate(-50%,-50%);
+    width: 34px; height: 34px; border-radius: 50%;
+    background: white; box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  }
+  .compare-slider::after {
+    content: '⟷'; position: absolute;
+    top: 50%; left: 50%; transform: translate(-50%,-50%);
+    color: #333; font-size: 14px; font-weight: bold;
+  }
+  .compare-label {
+    position: absolute; top: 8px;
+    padding: 3px 8px; border-radius: 4px;
+    background: rgba(0,0,0,0.6); color: white;
+    font-size: 10px; font-weight: 600; letter-spacing: 1px;
+    z-index: 5; display: none;
+    pointer-events: none;
+  }
+  .compare-label.before { left: 8px; }
+  .compare-label.after { right: 8px; background: var(--accent); color: white; }
+
+  /* ===== Controls ===== */
+  .controls {
+    background: var(--panel);
+    padding: 12px 14px 16px;
+    max-height: 52vh; overflow-y: auto;
+    flex-shrink: 0;
+  }
+  .row { display: flex; gap: 8px; margin-bottom: 12px; }
+  .btn {
+    flex: 1; min-width: 0;
+    padding: 10px 8px;
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+    -webkit-appearance: none;
+    white-space: nowrap; text-align: center;
+  }
+  .btn:active { transform: scale(0.96); }
+  .btn.primary {
+    background: linear-gradient(135deg, var(--accent), #c742a8);
+    border: none; color: white; font-weight: 600;
+  }
+  .btn.accent2 {
+    background: linear-gradient(135deg, var(--accent2), #4290c7);
+    border: none; color: white; font-weight: 600;
+  }
+  .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
+
+  .section-label {
+    font-size: 11px; color: var(--sub);
+    margin-bottom: 6px; display: flex; align-items: center; gap: 6px;
+  }
+  .section-label::after {
+    content: ''; flex: 1; height: 1px; background: var(--border);
+  }
+
+  .preset-row {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 6px; margin-bottom: 14px;
+  }
+  .preset {
+    padding: 8px 4px;
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 11px;
+    cursor: pointer;
+    text-align: center;
+    color: var(--sub);
+    transition: all 0.15s;
+    user-select: none;
+  }
+  .preset:active { transform: scale(0.95); }
+  .preset.active {
+    border-color: var(--accent);
+    background: rgba(255,110,199,0.14);
+    color: var(--accent);
+  }
+  .preset .emoji { display: block; font-size: 18px; margin-bottom: 2px; }
+
+  .slider-group { margin-bottom: 10px; }
+  .slider-label {
+    display: flex; justify-content: space-between;
+    font-size: 11px; color: var(--sub);
+    margin-bottom: 4px;
+  }
+  .slider-label .val { color: var(--accent); font-variant-numeric: tabular-nums; font-weight: 500; }
+  input[type="range"] {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 4px;
+    background: var(--panel2);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 18px; height: 18px;
+    background: var(--accent);
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(255,110,199,0.4);
+    transition: transform 0.1s;
+  }
+  input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); }
+
+  .file-input { display: none; }
+
+  .info {
+    font-size: 10px; color: var(--sub);
+    text-align: center; padding: 8px 4px 2px;
+    border-top: 1px solid var(--border);
+    margin-top: 4px;
+  }
+  .info a { color: var(--sub); }
+
+  /* PC layout */
+  @media (min-width: 900px) {
+    main { flex-direction: row; }
+    .canvas-area { flex: 1; border-bottom: none; }
+    .controls {
+      width: 360px; max-height: calc(100vh - 62px);
+      border-left: 1px solid var(--border);
+      overflow-y: auto;
+    }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>✨ PhotoEnhance</h1>
+    <div class="sub">推し写真を高画質化 — 完全無料・端末内処理</div>
+  </div>
+  <div class="sub" id="imgInfo"></div>
+</header>
+
+<main>
+  <div class="canvas-area" id="canvasArea">
+    <div class="placeholder" id="placeholder">
+      <span class="ico">📷</span>
+      <b>写真を選択してください</b>
+      <div class="hints">
+        <span class="hint-chip">📁 ファイル選択</span>
+        <span class="hint-chip">🖱 ドラッグ＆ドロップ</span>
+        <span class="hint-chip">📋 Ctrl+V ペースト</span>
+      </div>
+    </div>
+    <div class="canvas-wrap" id="canvasWrap" style="display:none;">
+      <canvas id="canvas"></canvas>
+      <div class="compare-label before">BEFORE</div>
+      <div class="compare-label after">AFTER</div>
+      <div class="compare-slider" id="compareSlider"></div>
+    </div>
+    <div class="processing-overlay" id="processingOverlay">
+      <div class="spinner"></div>
+      <div class="processing-label" id="processingLabel">処理中…</div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="row">
+      <label class="btn primary" for="fileInput">📁 画像を選択</label>
+      <input type="file" id="fileInput" class="file-input" accept="image/*">
+      <button class="btn" id="compareBtn" disabled>👁 比較</button>
+      <button class="btn accent2" id="downloadBtn" disabled>💾 保存</button>
+    </div>
+
+    <div class="section-label">プリセット</div>
+    <div class="preset-row">
+      <div class="preset active" data-preset="auto"><span class="emoji">✨</span>自動</div>
+      <div class="preset" data-preset="live"><span class="emoji">🎤</span>ライブ</div>
+      <div class="preset" data-preset="card"><span class="emoji">📸</span>チェキ</div>
+      <div class="preset" data-preset="selfie"><span class="emoji">🧑</span>ポートレート</div>
+    </div>
+
+    <div class="section-label">調整</div>
+    <div class="slider-group">
+      <div class="slider-label"><span>シャープネス</span><span class="val" id="vSharp">0.60</span></div>
+      <input type="range" id="sSharp" min="0" max="2.5" step="0.05" value="0.6">
+    </div>
+    <div class="slider-group">
+      <div class="slider-label"><span>ノイズ除去</span><span class="val" id="vDenoise">0.30</span></div>
+      <input type="range" id="sDenoise" min="0" max="1" step="0.05" value="0.3">
+    </div>
+    <div class="slider-group">
+      <div class="slider-label"><span>明るさ</span><span class="val" id="vBright">0</span></div>
+      <input type="range" id="sBright" min="-60" max="60" step="1" value="0">
+    </div>
+    <div class="slider-group">
+      <div class="slider-label"><span>コントラスト</span><span class="val" id="vContrast">10</span></div>
+      <input type="range" id="sContrast" min="-50" max="80" step="1" value="10">
+    </div>
+    <div class="slider-group">
+      <div class="slider-label"><span>彩度</span><span class="val" id="vSat">15</span></div>
+      <input type="range" id="sSat" min="-50" max="100" step="1" value="15">
+    </div>
+    <div class="slider-group">
+      <div class="slider-label"><span>ハイライト保護</span><span class="val" id="vHighlight">0</span></div>
+      <input type="range" id="sHighlight" min="0" max="100" step="1" value="0">
+    </div>
+    <div class="slider-group">
+      <div class="slider-label"><span>拡大率</span><span class="val" id="vScale">1x</span></div>
+      <input type="range" id="sScale" min="1" max="4" step="1" value="1">
+    </div>
+
+    <div class="row" style="margin-top:14px; margin-bottom:0;">
+      <button class="btn" id="resetBtn" style="font-size:11px;">↺ リセット</button>
+    </div>
+
+    <div class="info">
+      処理はすべてブラウザ内・端末内で完結。画像は外部に送信されません。<br>
+      <span style="opacity:0.6;">Ctrl+V でクリップボードから直接読み込み可能</span>
+    </div>
+  </div>
+</main>
+
+<script>
+/* ============================================================
+   Web Worker (inline Blob) — 重いピクセル処理をバックグラウンドで
+   ============================================================ */
+const WORKER_SRC = `
+'use strict';
+
+// ===== 5x5 ガウシアンブラー =====
+// カーネル: Pascal三角形 5x5
+const G5 = [1,4,6,4,1, 4,16,24,16,4, 6,24,36,24,6, 4,16,24,16,4, 1,4,6,4,1];
+const G5_SUM = G5.reduce((a,b)=>a+b, 0); // 256
+
+function gaussianBlur5(src, w, h) {
+  const dst = new Uint8ClampedArray(src.length);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let r = 0, g = 0, b = 0;
+      for (let ky = 0; ky < 5; ky++) {
+        for (let kx = 0; kx < 5; kx++) {
+          const nx = Math.min(w-1, Math.max(0, x + kx - 2));
+          const ny = Math.min(h-1, Math.max(0, y + ky - 2));
+          const ni = (ny * w + nx) * 4;
+          const wt = G5[ky*5+kx];
+          r += src[ni]   * wt;
+          g += src[ni+1] * wt;
+          b += src[ni+2] * wt;
+        }
+      }
+      const i = (y * w + x) * 4;
+      dst[i]   = r / G5_SUM;
+      dst[i+1] = g / G5_SUM;
+      dst[i+2] = b / G5_SUM;
+      dst[i+3] = src[i+3];
+    }
+  }
+  return dst;
+}
+
+// ===== バイラテラル風（エッジ保存ブラー）3×3 =====
+// 5×5 は25ops/pxで遅すぎるので 3×3(9ops/px) に抑える
+function bilateralBlur(src, w, h, strength) {
+  const dst = new Uint8ClampedArray(src.length);
+  const threshSq = (50 * (1 - strength * 0.5)) ** 2;
+  const blend = strength * 0.85;
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const cR = src[i], cG = src[i+1], cB = src[i+2];
+      let sumR = 0, sumG = 0, sumB = 0, cnt = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = Math.min(w-1, Math.max(0, x+dx));
+          const ny = Math.min(h-1, Math.max(0, y+dy));
+          const ni = (ny*w+nx)*4;
+          const dr = src[ni]-cR, dg = src[ni+1]-cG, db = src[ni+2]-cB;
+          if (dr*dr + dg*dg + db*db < threshSq) {
+            sumR += src[ni]; sumG += src[ni+1]; sumB += src[ni+2]; cnt++;
+          }
+        }
+      }
+      // cnt は必ず≥1（自分自身が含まれる）
+      dst[i]   = cR*(1-blend) + (sumR/cnt)*blend;
+      dst[i+1] = cG*(1-blend) + (sumG/cnt)*blend;
+      dst[i+2] = cB*(1-blend) + (sumB/cnt)*blend;
+      dst[i+3] = src[i+3];
+    }
+  }
+  return dst;
+}
+
+// ===== アンシャープマスク =====
+function unsharpMask(src, w, h, amount) {
+  const blurred = gaussianBlur5(src, w, h);
+  const dst = new Uint8ClampedArray(src.length);
+  for (let i = 0; i < src.length; i += 4) {
+    dst[i]   = clamp(src[i]   + (src[i]   - blurred[i])   * amount);
+    dst[i+1] = clamp(src[i+1] + (src[i+1] - blurred[i+1]) * amount);
+    dst[i+2] = clamp(src[i+2] + (src[i+2] - blurred[i+2]) * amount);
+    dst[i+3] = src[i+3];
+  }
+  return dst;
+}
+
+// ===== トーン調整 =====
+function toneAdjust(src, bright, contrast, sat, highlight) {
+  const dst = new Uint8ClampedArray(src.length);
+  const c = (contrast + 100) / 100;
+  const cOff = 128 * (1 - c);
+  const s = (sat + 100) / 100;
+  const hlStr = highlight / 100; // 0~1
+
+  for (let i = 0; i < src.length; i += 4) {
+    let r = src[i], g = src[i+1], b = src[i+2];
+    // 明るさ
+    r += bright; g += bright; b += bright;
+    // コントラスト
+    r = r*c + cOff; g = g*c + cOff; b = b*c + cOff;
+    // 彩度
+    const lum = 0.299*r + 0.587*g + 0.114*b;
+    r = lum + (r-lum)*s; g = lum + (g-lum)*s; b = lum + (b-lum)*s;
+    // ハイライト保護（白飛び抑制）
+    if (hlStr > 0) {
+      const maxV = Math.max(r, g, b);
+      if (maxV > 200) {
+        const pull = ((maxV - 200) / 55) * hlStr * 0.4;
+        r -= r * pull; g -= g * pull; b -= b * pull;
+      }
+    }
+    dst[i] = clamp(r); dst[i+1] = clamp(g); dst[i+2] = clamp(b);
+    dst[i+3] = src[i+3];
+  }
+  return dst;
+}
+
+function clamp(v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
+
+self.onmessage = function(e) {
+  const { pixelBuf, width, height, sharp, denoise, bright, contrast, sat, highlight } = e.data;
+  let work = new Uint8ClampedArray(pixelBuf);
+
+  if (denoise > 0.01) {
+    work = bilateralBlur(work, width, height, denoise);
+  }
+  if (sharp > 0.01) {
+    work = unsharpMask(work, width, height, sharp);
+  }
+  if (bright !== 0 || contrast !== 0 || sat !== 0 || highlight > 0) {
+    work = toneAdjust(work, bright, contrast, sat, highlight);
+  }
+
+  self.postMessage({ result: work.buffer }, [work.buffer]);
+};
+`;
+
+/* ============================================================
+   メインスクリプト
+   ============================================================ */
+(() => {
+  'use strict';
+
+  const worker = new Worker(URL.createObjectURL(
+    new Blob([WORKER_SRC], { type: 'application/javascript' })
+  ));
+
+  const $ = id => document.getElementById(id);
+  const fileInput      = $('fileInput');
+  const canvas         = $('canvas');
+  const ctx            = canvas.getContext('2d', { willReadFrequently: true });
+  const placeholder    = $('placeholder');
+  const canvasWrap     = $('canvasWrap');
+  const canvasArea     = $('canvasArea');
+  const imgInfo        = $('imgInfo');
+  const compareBtn     = $('compareBtn');
+  const downloadBtn    = $('downloadBtn');
+  const resetBtn       = $('resetBtn');
+  const compareSlider  = $('compareSlider');
+  const compareLabels  = document.querySelectorAll('.compare-label');
+  const processingOvl  = $('processingOverlay');
+  const processingLbl  = $('processingLabel');
+
+  const sliders = {
+    sharp: $('sSharp'), denoise: $('sDenoise'),
+    bright: $('sBright'), contrast: $('sContrast'),
+    sat: $('sSat'), highlight: $('sHighlight'), scale: $('sScale'),
+  };
+  const vals = {
+    sharp: $('vSharp'), denoise: $('vDenoise'),
+    bright: $('vBright'), contrast: $('vContrast'),
+    sat: $('vSat'), highlight: $('vHighlight'), scale: $('vScale'),
+  };
+
+  const DEFAULTS = { sharp: 0.6, denoise: 0.3, bright: 0, contrast: 10, sat: 15, highlight: 0, scale: 1 };
+
+  const PRESETS = {
+    auto:   { sharp: 0.6,  denoise: 0.3,  bright: 0,  contrast: 10, sat: 15, highlight: 0  },
+    live:   { sharp: 0.35, denoise: 0.75, bright: 18, contrast: 18, sat: 28, highlight: 20 }, // 暗所ノイズ・白飛び
+    card:   { sharp: 1.4,  denoise: 0.5,  bright: 5,  contrast: 25, sat: 8,  highlight: 10 }, // くっきり・モアレ対策
+    selfie: { sharp: 0.2,  denoise: 0.55, bright: 10, contrast: 8,  sat: 12, highlight: 15 }, // 肌なめらか
+  };
+
+  let originalImage      = null;
+  let originalImageData  = null;
+  let processedImageData = null;
+  let renderTimer        = null;
+  let workerBusy         = false;
+  let pendingRender      = false;
+  let compareMode        = false;
+  let comparePos         = 0.5;
+  // Worker に送った時点の幅・高さ（処理中に scale 変更されても混在しないよう保持）
+  let pendingW = 0, pendingH = 0;
+  let renderStart = 0;
+
+  // ===== Worker結果受け取り =====
+  worker.onmessage = (e) => {
+    // ★Bug3修正: 受け取り時の originalImageData ではなく、送信時の寸法で ImageData 生成
+    processedImageData = new ImageData(new Uint8ClampedArray(e.data.result), pendingW, pendingH);
+    workerBusy = false;
+    processingOvl.classList.remove('active');
+
+    const elapsed = (performance.now() - renderStart).toFixed(0);
+    imgInfo.textContent = `${pendingW}×${pendingH} · ${elapsed}ms`;
+
+    // 現在の canvas サイズと処理結果サイズが一致している場合のみ描画
+    if (canvas.width === pendingW && canvas.height === pendingH) {
+      if (compareMode) drawCompare();
+      else ctx.putImageData(processedImageData, 0, 0);
+    }
+
+    if (pendingRender) { pendingRender = false; scheduleRender(); }
+  };
+
+  // ===== Worker エラー =====
+  worker.onerror = (err) => {
+    console.error('Worker error:', err);
+    workerBusy = false;
+    processingOvl.classList.remove('active');
+    imgInfo.textContent = '⚠ 処理エラー';
+    if (pendingRender) { pendingRender = false; }
+  };
+
+  // ===== 画像読み込み共通 =====
+  function loadImage(src) {
+    const img = new Image();
+    img.onload = () => {
+      originalImage = img;
+      placeholder.style.display = 'none';
+      canvasWrap.style.display = 'flex';
+      compareBtn.disabled = false;
+      downloadBtn.disabled = false;
+      compareMode = false;
+      compareBtn.classList.remove('primary');
+      compareSlider.style.display = 'none';
+      compareLabels.forEach(l => l.style.display = 'none');
+      prepareSourceCanvas();
+      scheduleRender();
+      if (src.startsWith('blob:')) URL.revokeObjectURL(src);
+    };
+    img.src = src;
+  }
+
+  function loadFile(file) {
+    if (!file || !file.type.startsWith('image/')) return;
+    loadImage(URL.createObjectURL(file));
+  }
+
+  // ===== ファイル選択 =====
+  fileInput.addEventListener('change', e => { loadFile(e.target.files[0]); fileInput.value = ''; });
+
+  // ===== ドラッグ&ドロップ =====
+  canvasArea.addEventListener('dragenter', e => { e.preventDefault(); canvasArea.classList.add('drag-over'); });
+  canvasArea.addEventListener('dragover',  e => { e.preventDefault(); });
+  canvasArea.addEventListener('dragleave', e => {
+    if (!canvasArea.contains(e.relatedTarget)) canvasArea.classList.remove('drag-over');
+  });
+  canvasArea.addEventListener('drop', e => {
+    e.preventDefault();
+    canvasArea.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    loadFile(file);
+  });
+
+  // ===== クリップボード貼り付け (Ctrl+V / Cmd+V) =====
+  document.addEventListener('paste', async (e) => {
+    // clipboardData から画像取得
+    const items = Array.from(e.clipboardData?.items || []);
+    const imgItem = items.find(it => it.type.startsWith('image/'));
+    if (imgItem) {
+      e.preventDefault();
+      loadFile(imgItem.getAsFile());
+      return;
+    }
+    // Clipboard API fallback (Chrome)
+    try {
+      const clips = await navigator.clipboard.read();
+      for (const item of clips) {
+        const type = item.types.find(t => t.startsWith('image/'));
+        if (type) {
+          const blob = await item.getType(type);
+          loadFile(blob);
+          return;
+        }
+      }
+    } catch(_) {}
+  });
+
+  // ===== 拡大率 → 元画像Canvas準備 =====
+  function prepareSourceCanvas() {
+    if (!originalImage) return;
+    const scale = parseInt(sliders.scale.value, 10);
+    const MAX_PIX = 20_000_000;
+    let actualScale = scale;
+    const testW = originalImage.width * scale;
+    const testH = originalImage.height * scale;
+    if (testW * testH > MAX_PIX) {
+      actualScale = Math.sqrt(MAX_PIX / (originalImage.width * originalImage.height));
+    }
+    const finalW = Math.round(originalImage.width * actualScale);
+    const finalH = Math.round(originalImage.height * actualScale);
+
+    const sc = document.createElement('canvas');
+    sc.width = finalW; sc.height = finalH;
+    const sctx = sc.getContext('2d');
+    sctx.imageSmoothingEnabled = true;
+    sctx.imageSmoothingQuality = 'high';
+    sctx.drawImage(originalImage, 0, 0, finalW, finalH);
+    originalImageData = sctx.getImageData(0, 0, finalW, finalH);
+    canvas.width = finalW;
+    canvas.height = finalH;
+    ctx.putImageData(originalImageData, 0, 0);
+    imgInfo.textContent = `${finalW}×${finalH}`;
+  }
+
+  // ===== スライダー =====
+  Object.keys(sliders).forEach(k => {
+    sliders[k].addEventListener('input', () => {
+      updateLabels();
+      if (k === 'scale') prepareSourceCanvas();
+      scheduleRender();
+    });
+  });
+
+  function updateLabels() {
+    vals.sharp.textContent    = parseFloat(sliders.sharp.value).toFixed(2);
+    vals.denoise.textContent  = parseFloat(sliders.denoise.value).toFixed(2);
+    vals.bright.textContent   = sliders.bright.value;
+    vals.contrast.textContent = sliders.contrast.value;
+    vals.sat.textContent      = sliders.sat.value;
+    vals.highlight.textContent= sliders.highlight.value;
+    vals.scale.textContent    = sliders.scale.value + 'x';
+  }
+
+  // ===== プリセット =====
+  document.querySelectorAll('.preset').forEach(el => {
+    el.addEventListener('click', () => {
+      document.querySelectorAll('.preset').forEach(e => e.classList.remove('active'));
+      el.classList.add('active');
+      const p = PRESETS[el.dataset.preset];
+      Object.keys(p).forEach(k => { if (sliders[k]) sliders[k].value = p[k]; });
+      updateLabels();
+      scheduleRender();
+    });
+  });
+
+  // ===== リセット =====
+  resetBtn.addEventListener('click', () => {
+    const prevScale = parseInt(sliders.scale.value, 10);
+    Object.keys(DEFAULTS).forEach(k => { if (sliders[k]) sliders[k].value = DEFAULTS[k]; });
+    document.querySelectorAll('.preset').forEach(e => e.classList.remove('active'));
+    document.querySelector('[data-preset="auto"]').classList.add('active');
+    updateLabels();
+    // ★Bug2修正: scale が変化した場合は canvas/originalImageData を再生成する
+    if (prevScale !== DEFAULTS.scale) prepareSourceCanvas();
+    scheduleRender();
+  });
+
+  // ===== レンダー（Workerへ投げる）=====
+  function scheduleRender() {
+    if (!originalImageData) return;
+    if (renderTimer) clearTimeout(renderTimer);
+    renderTimer = setTimeout(() => render(), 80); // 80ms デバウンス
+  }
+
+  function render() {
+    if (!originalImageData) return;
+    if (workerBusy) { pendingRender = true; return; }
+
+    processingOvl.classList.add('active');
+    processingLbl.textContent = '処理中…';
+    workerBusy = true;
+    renderStart = performance.now();
+
+    // ★Bug3修正: 送信時の寸法を保持する
+    pendingW = originalImageData.width;
+    pendingH = originalImageData.height;
+
+    const sharp     = parseFloat(sliders.sharp.value);
+    const denoise   = parseFloat(sliders.denoise.value);
+    const bright    = parseInt(sliders.bright.value, 10);
+    const contrast  = parseInt(sliders.contrast.value, 10);
+    const sat       = parseInt(sliders.sat.value, 10);
+    const highlight = parseInt(sliders.highlight.value, 10);
+
+    // コピーして Worker に transfer（メインスレッド→Workerにゼロコピー転送）
+    const copy = new Uint8ClampedArray(originalImageData.data).buffer;
+    worker.postMessage(
+      { pixelBuf: copy, width: pendingW, height: pendingH,
+        sharp, denoise, bright, contrast, sat, highlight },
+      [copy]
+    );
+  }
+
+  // ===== 比較モード =====
+  compareBtn.addEventListener('click', () => {
+    compareMode = !compareMode;
+    compareBtn.classList.toggle('primary', compareMode);
+    compareSlider.style.display = compareMode ? 'block' : 'none';
+    compareLabels.forEach(l => l.style.display = compareMode ? 'block' : 'none');
+    if (compareMode) drawCompare();
+    else if (processedImageData) ctx.putImageData(processedImageData, 0, 0);
+  });
+
+  function drawCompare() {
+    if (!originalImageData || !processedImageData) return;
+    const w = canvas.width, h = canvas.height;
+    const splitX = Math.floor(w * comparePos);
+    ctx.putImageData(originalImageData,   0, 0, 0,      0, splitX,     h);
+    ctx.putImageData(processedImageData, 0, 0, splitX, 0, w - splitX, h);
+
+    const rect = canvas.getBoundingClientRect();
+    const wrapRect = canvasWrap.getBoundingClientRect();
+    const left = (rect.left - wrapRect.left) + rect.width * comparePos;
+    compareSlider.style.left   = left + 'px';
+    compareSlider.style.height = rect.height + 'px';
+    compareSlider.style.top    = (rect.top - wrapRect.top) + 'px';
+  }
+
+  // 比較スライダー ドラッグ
+  let dragging = false;
+  const onDragStart = e => { if (!compareMode) return; dragging = true; e.preventDefault(); };
+  const onDragMove  = e => {
+    if (!dragging || !compareMode) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+    comparePos = Math.max(0, Math.min(1, x / rect.width));
+    drawCompare();
+  };
+  const onDragEnd = () => { dragging = false; };
+  canvasWrap.addEventListener('mousedown', onDragStart);
+  window.addEventListener('mousemove', onDragMove);
+  window.addEventListener('mouseup', onDragEnd);
+  canvasWrap.addEventListener('touchstart', onDragStart, { passive: false });
+  window.addEventListener('touchmove', onDragMove, { passive: false });
+  window.addEventListener('touchend', onDragEnd);
+
+  // ===== 保存 =====
+  downloadBtn.addEventListener('click', () => {
+    if (!processedImageData) return;
+    const out = document.createElement('canvas');
+    out.width = canvas.width; out.height = canvas.height;
+    out.getContext('2d').putImageData(processedImageData, 0, 0);
+    out.toBlob(blob => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `enhanced_${Date.now()}.png`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    }, 'image/png');
+  });
+
+  updateLabels();
+})();
+</script>
+</body>
+</html>
