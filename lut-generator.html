@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>LUT自動生成 — Before/After動画から .cube 作成</title>
+<style>
+  :root {
+    --bg: #0e0e14;
+    --panel: #1a1a24;
+    --panel2: #232330;
+    --text: #e8e8f0;
+    --sub: #9a9ab0;
+    --accent: #ff6ec7;
+    --accent2: #6ec7ff;
+    --border: #2a2a3a;
+    --ok: #6ecf8f;
+    --warn: #ffcf6e;
+    --err: #ff6e6e;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+    overscroll-behavior: none;
+  }
+  body { min-height: 100vh; display: flex; flex-direction: column; }
+
+  header {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    background: linear-gradient(90deg, rgba(255,110,199,0.08), rgba(110,199,255,0.08));
+    flex-shrink: 0;
+  }
+  header h1 {
+    margin: 0; font-size: 16px; font-weight: 600;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  header .sub { font-size: 11px; color: var(--sub); }
+
+  main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+  .wrap { padding: 14px 14px 24px; max-width: 720px; margin: 0 auto; width: 100%; }
+
+  .section-label {
+    font-size: 11px; color: var(--sub);
+    margin: 18px 0 8px; display: flex; align-items: center; gap: 6px;
+  }
+  .section-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+  .section-label:first-child { margin-top: 0; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+  }
+
+  .video-row { display: flex; gap: 10px; }
+  .video-slot { flex: 1; min-width: 0; }
+  .video-slot label.picker {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 4px;
+    height: 88px;
+    background: var(--panel2);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 11px;
+    color: var(--sub);
+    text-align: center;
+    padding: 6px;
+  }
+  .video-slot label.picker.has-file { border-style: solid; border-color: var(--accent); color: var(--text); }
+  .video-slot label.picker .ico { font-size: 22px; }
+  .video-slot .fname { font-size: 10px; color: var(--sub); margin-top: 6px; word-break: break-all; text-align: center; line-height: 1.4; }
+  .video-slot input[type="file"] { display: none; }
+  .video-slot .thumb {
+    width: 100%; height: 60px; object-fit: cover; border-radius: 6px; margin-top: 6px; display: none;
+    background: #000;
+  }
+
+  .row { display: flex; gap: 8px; margin-bottom: 10px; }
+  .btn {
+    flex: 1; min-width: 0;
+    padding: 11px 8px;
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: all 0.15s;
+    -webkit-appearance: none;
+    white-space: nowrap; text-align: center;
+  }
+  .btn:active { transform: scale(0.96); }
+  .btn.primary {
+    background: linear-gradient(135deg, var(--accent), #c742a8);
+    border: none; color: white; font-weight: 600;
+  }
+  .btn.accent2 {
+    background: linear-gradient(135deg, var(--accent2), #4290c7);
+    border: none; color: white; font-weight: 600;
+  }
+  .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
+
+  .preset-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 4px; }
+  .preset {
+    padding: 8px 4px;
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 11px;
+    cursor: pointer;
+    text-align: center;
+    color: var(--sub);
+    user-select: none;
+  }
+  .preset:active { transform: scale(0.95); }
+  .preset.active { border-color: var(--accent); background: rgba(255,110,199,0.14); color: var(--accent); }
+  .preset .emoji { display: block; font-size: 17px; margin-bottom: 2px; }
+
+  .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 11px; color: var(--sub); }
+  .field select, .field input[type="number"] {
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 8px;
+    font-size: 13px;
+    -webkit-appearance: none;
+  }
+
+  .hint { font-size: 10.5px; color: var(--sub); line-height: 1.6; margin-top: 8px; }
+
+  .log {
+    background: #06060a;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.6;
+    height: 160px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .log .l-ok { color: var(--ok); }
+  .log .l-warn { color: var(--warn); }
+  .log .l-err { color: var(--err); }
+  .log .l-sub { color: var(--sub); }
+
+  .preview-row { display: flex; gap: 10px; margin-top: 10px; }
+  .preview-slot { flex: 1; min-width: 0; text-align: center; }
+  .preview-slot canvas { width: 100%; border-radius: 8px; background: #000; display: block; }
+  .preview-slot .cap { font-size: 10px; color: var(--sub); margin-top: 4px; }
+
+  textarea#cubeText {
+    width: 100%; height: 90px;
+    background: var(--panel2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    font-family: ui-monospace, monospace; font-size: 10.5px;
+    padding: 8px; resize: vertical;
+  }
+
+  .footer-info {
+    font-size: 10px; color: var(--sub);
+    text-align: center; padding: 14px 4px 2px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>🎞 LUT自動生成</h1>
+    <div class="sub">Before/After動画から .cube LUTを作成</div>
+  </div>
+</header>
+
+<main>
+  <div class="wrap">
+
+    <div class="section-label">1. 動画を選択</div>
+    <div class="video-row">
+      <div class="video-slot">
+        <label class="picker" for="beforeInput" id="beforePicker">
+          <span class="ico">📥</span>
+          <span>Before動画</span>
+        </label>
+        <input type="file" id="beforeInput" accept="video/*">
+        <video class="thumb" id="beforeThumb" muted playsinline></video>
+        <div class="fname" id="beforeName"></div>
+      </div>
+      <div class="video-slot">
+        <label class="picker" for="afterInput" id="afterPicker">
+          <span class="ico">📤</span>
+          <span>After動画</span>
+        </label>
+        <input type="file" id="afterInput" accept="video/*">
+        <video class="thumb" id="afterThumb" muted playsinline></video>
+        <div class="fname" id="afterName"></div>
+      </div>
+    </div>
+    <div class="hint">
+      同じ範囲・同じ動きのBefore/After動画を選んでください。5〜10秒程度の短い区間で十分です。<br>
+      重い動画（4K・60fps・ProRes・Log・長尺）は先に1080p以下・H.264 MP4で5〜10秒に切り出してから使うと安定します。
+    </div>
+
+    <div class="section-label">2. 解析設定</div>
+    <div class="panel">
+      <div class="preset-row">
+        <div class="preset" data-preset="light"><span class="emoji">🪶</span>超軽量</div>
+        <div class="preset active" data-preset="normal"><span class="emoji">⚖️</span>標準</div>
+        <div class="preset" data-preset="high"><span class="emoji">🎯</span>高精度</div>
+      </div>
+      <div class="field-grid">
+        <div class="field">
+          <label>LUTサイズ</label>
+          <select id="lutSize">
+            <option value="9">9</option>
+            <option value="17" selected>17</option>
+            <option value="33">33</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>解析フレーム数</label>
+          <input type="number" id="frameCount" min="2" max="32" value="8">
+        </div>
+        <div class="field">
+          <label>解析幅 (px)</label>
+          <input type="number" id="analyzeWidth" min="32" max="320" value="96">
+        </div>
+        <div class="field">
+          <label>解析開始秒</label>
+          <input type="number" id="startSec" min="0" step="0.5" value="0">
+        </div>
+        <div class="field">
+          <label>解析する長さ（秒・0=全体）</label>
+          <input type="number" id="durationSec" min="0" step="0.5" value="6">
+        </div>
+        <div class="field">
+          <label>LUTタイトル</label>
+          <input type="text" id="lutTitle" value="Custom LUT">
+        </div>
+      </div>
+    </div>
+
+    <div class="section-label">3. 実行</div>
+    <div class="row">
+      <button class="btn primary" id="runBtn" disabled>✨ LUTを作成</button>
+    </div>
+    <div class="log" id="log"><span class="l-sub">// ログはここに表示されます</span></div>
+
+    <div id="resultBlock" style="display:none;">
+      <div class="section-label">4. 結果</div>
+      <div class="preview-row">
+        <div class="preview-slot">
+          <canvas id="beforePreview"></canvas>
+          <div class="cap">BEFORE（解析フレーム）</div>
+        </div>
+        <div class="preview-slot">
+          <canvas id="afterPreview"></canvas>
+          <div class="cap">LUT適用後（推定）</div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px;">
+        <button class="btn accent2" id="downloadBtn">💾 .cubeをダウンロード</button>
+        <button class="btn" id="copyBtn">📋 テキストをコピー</button>
+      </div>
+      <textarea id="cubeText" readonly></textarea>
+    </div>
+
+    <div class="footer-info">
+      処理はすべてブラウザ内で完結。動画は外部に送信されません。<br>
+      安定して使うにはこのページをURLとしてSafariで開いてください（ファイルアプリのQuick Look表示では動作しないことがあります）。
+    </div>
+  </div>
+</main>
+
+<script>
+'use strict';
+
+/* ===================== ログ ===================== */
+const logEl = document.getElementById('log');
+function log(msg, cls) {
+  const line = document.createElement('div');
+  if (cls) line.className = 'l-' + cls;
+  const t = new Date().toLocaleTimeString('ja-JP', { hour12: false });
+  line.textContent = `[${t}] ${msg}`;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+log('JS起動済み', 'ok');
+
+/* ===================== 状態 ===================== */
+const state = {
+  beforeFile: null,
+  afterFile: null,
+  beforeVideo: null,
+  afterVideo: null,
+};
+
+const beforeInput = document.getElementById('beforeInput');
+const afterInput = document.getElementById('afterInput');
+const beforePicker = document.getElementById('beforePicker');
+const afterPicker = document.getElementById('afterPicker');
+const beforeThumb = document.getElementById('beforeThumb');
+const afterThumb = document.getElementById('afterThumb');
+const beforeName = document.getElementById('beforeName');
+const afterName = document.getElementById('afterName');
+const runBtn = document.getElementById('runBtn');
+
+function updateRunEnabled() {
+  runBtn.disabled = !(state.beforeFile && state.afterFile);
+}
+
+function loadVideoIntoSlot(file, videoEl, pickerEl, nameEl, kind) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    videoEl.src = url;
+    videoEl.style.display = 'block';
+    videoEl.onloadedmetadata = () => {
+      log(`${kind}動画メタデータ読み込み完了（${videoEl.videoWidth}x${videoEl.videoHeight}, ${videoEl.duration.toFixed(1)}秒）`, 'ok');
+      pickerEl.classList.add('has-file');
+      nameEl.textContent = `${file.name}（${videoEl.duration.toFixed(1)}秒）`;
+      resolve();
+    };
+    videoEl.onerror = () => {
+      log(`${kind}動画の読み込みに失敗しました。形式が非対応の可能性があります。`, 'err');
+      reject(new Error('video load error'));
+    };
+  });
+}
+
+beforeInput.addEventListener('change', async () => {
+  const f = beforeInput.files && beforeInput.files[0];
+  if (!f) return;
+  log(`Before動画を選択: ${f.name}`);
+  state.beforeFile = f;
+  try {
+    await loadVideoIntoSlot(f, beforeThumb, beforePicker, beforeName, 'Before');
+    state.beforeVideo = beforeThumb;
+  } catch (e) { state.beforeFile = null; }
+  updateRunEnabled();
+});
+
+afterInput.addEventListener('change', async () => {
+  const f = afterInput.files && afterInput.files[0];
+  if (!f) return;
+  log(`After動画を選択: ${f.name}`);
+  state.afterFile = f;
+  try {
+    await loadVideoIntoSlot(f, afterThumb, afterPicker, afterName, 'After');
+    state.afterVideo = afterThumb;
+  } catch (e) { state.afterFile = null; }
+  updateRunEnabled();
+});
+
+/* ===================== プリセット ===================== */
+const PRESETS = {
+  light:  { lutSize: 17, frameCount: 4,  analyzeWidth: 64,  durationSec: 6 },
+  normal: { lutSize: 17, frameCount: 8,  analyzeWidth: 96,  durationSec: 6 },
+  high:   { lutSize: 33, frameCount: 16, analyzeWidth: 192, durationSec: 8 },
+};
+document.querySelectorAll('.preset').forEach(el => {
+  el.addEventListener('click', () => {
+    document.querySelectorAll('.preset').forEach(p => p.classList.remove('active'));
+    el.classList.add('active');
+    const p = PRESETS[el.dataset.preset];
+    document.getElementById('lutSize').value = p.lutSize;
+    document.getElementById('frameCount').value = p.frameCount;
+    document.getElementById('analyzeWidth').value = p.analyzeWidth;
+    document.getElementById('durationSec').value = p.durationSec;
+  });
+});
+
+/* ===================== 動画フレーム取得 ===================== */
+function seekTo(video, t) {
+  return new Promise((resolve) => {
+    const target = Math.min(Math.max(t, 0), Math.max(video.duration - 0.05, 0));
+    let done = false;
+    const onSeeked = () => {
+      if (done) return;
+      done = true;
+      video.removeEventListener('seeked', onSeeked);
+      resolve();
+    };
+    video.addEventListener('seeked', onSeeked);
+    video.currentTime = target;
+    // iOS Quick Look等でseekedが来ない場合のフォールバック
+    setTimeout(() => {
+      if (done) return;
+      done = true;
+      video.removeEventListener('seeked', onSeeked);
+      resolve();
+    }, 4000);
+  });
+}
+
+function grabFrame(video, width, canvas) {
+  const ratio = video.videoHeight / video.videoWidth || 0.5625;
+  const w = width;
+  const h = Math.max(2, Math.round(w * ratio));
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(video, 0, 0, w, h);
+  return ctx.getImageData(0, 0, w, h);
+}
+
+/* ===================== 線形代数（4x4連立方程式） ===================== */
+function solve4(A, b) {
+  // A: 4x4, b: 4  -> ガウスの消去法（部分ピボット選択）
+  const n = 4;
+  const M = A.map((row, i) => [...row, b[i]]);
+  for (let col = 0; col < n; col++) {
+    let piv = col;
+    for (let r = col + 1; r < n; r++) {
+      if (Math.abs(M[r][col]) > Math.abs(M[piv][col])) piv = r;
+    }
+    [M[col], M[piv]] = [M[piv], M[col]];
+    const pivotVal = M[col][col] || 1e-9;
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const factor = M[r][col] / pivotVal;
+      for (let c = col; c <= n; c++) M[r][c] -= factor * M[col][c];
+    }
+  }
+  return M.map((row, i) => row[n] / (row[i] || 1e-9));
+}
+
+/* ===================== サンプル収集 ===================== */
+async function collectSamples(beforeVideo, afterVideo, frameCount, width, startSec, durationSec) {
+  const bCanvas = document.createElement('canvas');
+  const aCanvas = document.createElement('canvas');
+  const maxDur = Math.min(beforeVideo.duration, afterVideo.duration);
+  let dur = durationSec > 0 ? Math.min(durationSec, maxDur - startSec) : (maxDur - startSec);
+  if (dur <= 0) dur = maxDur;
+  const samples = [];
+
+  for (let i = 0; i < frameCount; i++) {
+    const frac = frameCount === 1 ? 0 : i / (frameCount - 1);
+    const t = startSec + dur * frac;
+    log(`フレーム解析中 ${i + 1}/${frameCount}（${t.toFixed(2)}秒）...`, 'sub');
+    await Promise.all([seekTo(beforeVideo, t), seekTo(afterVideo, t)]);
+    const bData = grabFrame(beforeVideo, width, bCanvas);
+    const aData = grabFrame(afterVideo, width, aCanvas);
+    const n = Math.min(bData.data.length, aData.data.length) / 4;
+    for (let p = 0; p < n; p++) {
+      const o = p * 4;
+      samples.push({
+        inR: bData.data[o], inG: bData.data[o + 1], inB: bData.data[o + 2],
+        outR: aData.data[o], outG: aData.data[o + 1], outB: aData.data[o + 2],
+      });
+    }
+    if (i === 0) {
+      // 解析開始フレームをプレビュー用に保存
+      window.__firstBeforeCanvas = document.createElement('canvas');
+      window.__firstBeforeCanvas.width = bCanvas.width;
+      window.__firstBeforeCanvas.height = bCanvas.height;
+      window.__firstBeforeCanvas.getContext('2d').drawImage(bCanvas, 0, 0);
+    }
+  }
+  log(`合計 ${samples.length} 画素ペアを収集しました`, 'ok');
+  return samples;
+}
+
+/* ===================== アフィン行列フィッティング ===================== */
+function fitAffine(samples) {
+  const ATA = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]];
+  const ATyR = [0,0,0,0], ATyG = [0,0,0,0], ATyB = [0,0,0,0];
+  for (const s of samples) {
+    const x = [s.inR / 255, s.inG / 255, s.inB / 255, 1];
+    for (let r = 0; r < 4; r++) {
+      for (let c = 0; c < 4; c++) ATA[r][c] += x[r] * x[c];
+      ATyR[r] += x[r] * (s.outR / 255);
+      ATyG[r] += x[r] * (s.outG / 255);
+      ATyB[r] += x[r] * (s.outB / 255);
+    }
+  }
+  // 数値安定化のための微小正則化
+  for (let i = 0; i < 4; i++) ATA[i][i] += 1e-6;
+  const mR = solve4(ATA, ATyR);
+  const mG = solve4(ATA, ATyG);
+  const mB = solve4(ATA, ATyB);
+  return [mR, mG, mB]; // 各 [a, b, c, d] で out = a*R+b*G+c*B+d（0-1スケール）
+}
+
+function applyAffine(matrix, r01, g01, b01) {
+  const out = [0, 0, 0];
+  for (let i = 0; i < 3; i++) {
+    const m = matrix[i];
+    out[i] = m[0] * r01 + m[1] * g01 + m[2] * b01 + m[3];
+  }
+  return out;
+}
+
+/* ===================== チャンネル別トーンカーブ補正 ===================== */
+function fitCurves(samples, matrix) {
+  const BINS = 256;
+  const sums = [new Float64Array(BINS), new Float64Array(BINS), new Float64Array(BINS)];
+  const counts = [new Float64Array(BINS), new Float64Array(BINS), new Float64Array(BINS)];
+
+  for (const s of samples) {
+    const pred = applyAffine(matrix, s.inR / 255, s.inG / 255, s.inB / 255);
+    const actual = [s.outR / 255, s.outG / 255, s.outB / 255];
+    for (let c = 0; c < 3; c++) {
+      let bin = Math.round(pred[c] * (BINS - 1));
+      bin = Math.min(BINS - 1, Math.max(0, bin));
+      sums[c][bin] += actual[c];
+      counts[c][bin]++;
+    }
+  }
+
+  const curves = [];
+  for (let c = 0; c < 3; c++) {
+    const curve = new Float64Array(BINS);
+    const filled = new Uint8Array(BINS);
+    for (let i = 0; i < BINS; i++) {
+      if (counts[c][i] > 0) { curve[i] = sums[c][i] / counts[c][i]; filled[i] = 1; }
+    }
+    // 未使用ビンは前後の既知ビンから線形補間（両端は最寄りの値でクランプ）
+    let lastIdx = -1, lastVal = 0;
+    for (let i = 0; i < BINS; i++) {
+      if (filled[i]) {
+        if (lastIdx === -1 && i > 0) for (let k = 0; k < i; k++) curve[k] = curve[i];
+        if (lastIdx !== -1 && i - lastIdx > 1) {
+          for (let k = lastIdx + 1; k < i; k++) {
+            const f = (k - lastIdx) / (i - lastIdx);
+            curve[k] = lastVal * (1 - f) + curve[i] * f;
+          }
+        }
+        lastIdx = i; lastVal = curve[i];
+      }
+    }
+    if (lastIdx === -1) { for (let i = 0; i < BINS; i++) curve[i] = i / (BINS - 1); }
+    else if (lastIdx < BINS - 1) for (let k = lastIdx + 1; k < BINS; k++) curve[k] = lastVal;
+    curves.push(curve);
+  }
+  return curves;
+}
+
+function applyCurve(curve, v01) {
+  const BINS = curve.length;
+  const pos = Math.min(BINS - 1, Math.max(0, v01 * (BINS - 1)));
+  const i0 = Math.floor(pos), i1 = Math.min(BINS - 1, i0 + 1);
+  const f = pos - i0;
+  return curve[i0] * (1 - f) + curve[i1] * f;
+}
+
+function transformPixel(matrix, curves, r01, g01, b01) {
+  const pred = applyAffine(matrix, r01, g01, b01);
+  return [
+    Math.min(1, Math.max(0, applyCurve(curves[0], Math.min(1, Math.max(0, pred[0]))))),
+    Math.min(1, Math.max(0, applyCurve(curves[1], Math.min(1, Math.max(0, pred[1]))))),
+    Math.min(1, Math.max(0, applyCurve(curves[2], Math.min(1, Math.max(0, pred[2]))))),
+  ];
+}
+
+/* ===================== .cube 生成 ===================== */
+function buildCube(size, matrix, curves, title) {
+  const lines = [];
+  lines.push(`TITLE "${title}"`);
+  lines.push(`LUT_3D_SIZE ${size}`);
+  lines.push('DOMAIN_MIN 0.0 0.0 0.0');
+  lines.push('DOMAIN_MAX 1.0 1.0 1.0');
+  for (let b = 0; b < size; b++) {
+    for (let g = 0; g < size; g++) {
+      for (let r = 0; r < size; r++) {
+        const r01 = r / (size - 1), g01 = g / (size - 1), b01 = b / (size - 1);
+        const [or, og, ob] = transformPixel(matrix, curves, r01, g01, b01);
+        lines.push(`${or.toFixed(6)} ${og.toFixed(6)} ${ob.toFixed(6)}`);
+      }
+    }
+  }
+  return lines.join('\n') + '\n';
+}
+
+/* ===================== プレビュー描画 ===================== */
+function renderPreview(matrix, curves) {
+  const src = window.__firstBeforeCanvas;
+  if (!src) return;
+  const beforeCanvas = document.getElementById('beforePreview');
+  const afterCanvas = document.getElementById('afterPreview');
+  beforeCanvas.width = src.width; beforeCanvas.height = src.height;
+  afterCanvas.width = src.width; afterCanvas.height = src.height;
+  beforeCanvas.getContext('2d').drawImage(src, 0, 0);
+
+  const srcCtx = src.getContext('2d');
+  const imgData = srcCtx.getImageData(0, 0, src.width, src.height);
+  const outData = new ImageData(src.width, src.height);
+  for (let p = 0; p < imgData.data.length; p += 4) {
+    const [or, og, ob] = transformPixel(
+      matrix, curves,
+      imgData.data[p] / 255, imgData.data[p + 1] / 255, imgData.data[p + 2] / 255
+    );
+    outData.data[p] = Math.round(or * 255);
+    outData.data[p + 1] = Math.round(og * 255);
+    outData.data[p + 2] = Math.round(ob * 255);
+    outData.data[p + 3] = 255;
+  }
+  afterCanvas.getContext('2d').putImageData(outData, 0, 0);
+}
+
+/* ===================== メイン処理 ===================== */
+runBtn.addEventListener('click', async () => {
+  log('LUT作成ボタンが押されました', 'ok');
+  if (!state.beforeVideo || !state.afterVideo) {
+    log('Before/After両方の動画を選択してください', 'err');
+    return;
+  }
+  runBtn.disabled = true;
+  document.getElementById('resultBlock').style.display = 'none';
+
+  try {
+    const lutSize = parseInt(document.getElementById('lutSize').value, 10);
+    const frameCount = Math.max(1, parseInt(document.getElementById('frameCount').value, 10) || 8);
+    const analyzeWidth = Math.max(16, parseInt(document.getElementById('analyzeWidth').value, 10) || 96);
+    const startSec = Math.max(0, parseFloat(document.getElementById('startSec').value) || 0);
+    const durationSec = Math.max(0, parseFloat(document.getElementById('durationSec').value) || 0);
+    const title = document.getElementById('lutTitle').value || 'Custom LUT';
+
+    log(`設定: LUTサイズ=${lutSize}, フレーム数=${frameCount}, 解析幅=${analyzeWidth}px, 開始=${startSec}秒, 長さ=${durationSec || '全体'}秒`);
+
+    const samples = await collectSamples(state.beforeVideo, state.afterVideo, frameCount, analyzeWidth, startSec, durationSec);
+    if (samples.length === 0) throw new Error('画素サンプルを取得できませんでした');
+
+    log('カラー変換（アフィン行列）を計算中...', 'sub');
+    const matrix = fitAffine(samples);
+    log('トーンカーブ補正を計算中...', 'sub');
+    const curves = fitCurves(samples, matrix);
+
+    log(`3D LUT (${lutSize}x${lutSize}x${lutSize}) を構築中...`, 'sub');
+    const cubeText = buildCube(lutSize, matrix, curves, title);
+
+    document.getElementById('cubeText').value = cubeText;
+    renderPreview(matrix, curves);
+    document.getElementById('resultBlock').style.display = 'block';
+    log('LUT作成が完了しました。ダウンロードできます。', 'ok');
+  } catch (e) {
+    log('エラー: ' + (e && e.message ? e.message : e), 'err');
+    console.error(e);
+  } finally {
+    runBtn.disabled = false;
+  }
+});
+
+/* ===================== ダウンロード / コピー ===================== */
+document.getElementById('downloadBtn').addEventListener('click', () => {
+  const text = document.getElementById('cubeText').value;
+  if (!text) return;
+  try {
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = (document.getElementById('lutTitle').value || 'lut').replace(/[^\w\-]+/g, '_') + '.cube';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    log('ダウンロードを開始しました', 'ok');
+  } catch (e) {
+    log('ダウンロードに失敗しました。下のテキストを長押しでコピーして .cube として保存してください', 'warn');
+  }
+});
+
+document.getElementById('copyBtn').addEventListener('click', async () => {
+  const ta = document.getElementById('cubeText');
+  try {
+    await navigator.clipboard.writeText(ta.value);
+    log('テキストをコピーしました', 'ok');
+  } catch (e) {
+    ta.focus(); ta.select();
+    try { document.execCommand('copy'); log('テキストをコピーしました', 'ok'); }
+    catch (e2) { log('コピーに失敗しました。手動で選択してコピーしてください', 'warn'); }
+  }
+});
+
+updateRunEnabled();
+</script>
+</body>
+</html>
