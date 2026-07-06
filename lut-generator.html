@@ -321,15 +321,31 @@ function updateRunEnabled() {
   runBtn.disabled = !(state.beforeFile && state.afterFile);
 }
 
+// iOSのSafariは一度 play() してデコードを開始しないと、シークしてもcanvasに
+// 真っ黒なフレームしか描画できないことがある。読み込み直後に一瞬だけ再生して
+// すぐ止め、デコーダーを起こしておく。
+async function primeVideoDecoder(videoEl) {
+  try {
+    const p = videoEl.play();
+    if (p && typeof p.then === 'function') await p;
+    await new Promise(r => setTimeout(r, 80));
+  } catch (e) {
+    // 自動再生がブロックされた場合は無視して先に進む
+  } finally {
+    videoEl.pause();
+  }
+}
+
 function loadVideoIntoSlot(file, videoEl, pickerEl, nameEl, kind) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     videoEl.src = url;
     videoEl.style.display = 'block';
-    videoEl.onloadedmetadata = () => {
+    videoEl.onloadedmetadata = async () => {
       log(`${kind}動画メタデータ読み込み完了（${videoEl.videoWidth}x${videoEl.videoHeight}, ${videoEl.duration.toFixed(1)}秒）`, 'ok');
       pickerEl.classList.add('has-file');
       nameEl.textContent = `${file.name}（${videoEl.duration.toFixed(1)}秒）`;
+      await primeVideoDecoder(videoEl);
       resolve();
     };
     videoEl.onerror = () => {
@@ -415,6 +431,19 @@ function grabFrame(video, width, canvas) {
   return ctx.getImageData(0, 0, w, h);
 }
 
+// 動画のデコードに失敗していると、canvasに真っ黒なフレームだけが描画され続けることがある
+// （特にiOSでProRes/Log/4Kなど重い動画をシークした場合）。誤ったLUTを気づかず作ってしまわないよう検知する。
+function frameAverageBrightness(imgData) {
+  const d = imgData.data;
+  let sum = 0, count = 0;
+  const step = 4 * 23; // 間引いてサンプリング
+  for (let i = 0; i < d.length; i += step) {
+    sum += d[i] + d[i + 1] + d[i + 2];
+    count++;
+  }
+  return count ? sum / (count * 3) : 0;
+}
+
 /* ===================== 線形代数（4x4連立方程式） ===================== */
 function solve4(A, b) {
   // A: 4x4, b: 4  -> ガウスの消去法（部分ピボット選択）
@@ -444,6 +473,7 @@ async function collectSamples(beforeVideo, afterVideo, frameCount, width, startS
   let dur = durationSec > 0 ? Math.min(durationSec, maxDur - startSec) : (maxDur - startSec);
   if (dur <= 0) dur = maxDur;
   const samples = [];
+  let blackFrameWarned = false;
 
   for (let i = 0; i < frameCount; i++) {
     const frac = frameCount === 1 ? 0 : i / (frameCount - 1);
@@ -452,6 +482,10 @@ async function collectSamples(beforeVideo, afterVideo, frameCount, width, startS
     await Promise.all([seekTo(beforeVideo, t), seekTo(afterVideo, t)]);
     const bData = grabFrame(beforeVideo, width, bCanvas);
     const aData = grabFrame(afterVideo, width, aCanvas);
+    if (!blackFrameWarned && (frameAverageBrightness(bData) < 2 || frameAverageBrightness(aData) < 2)) {
+      blackFrameWarned = true;
+      log('⚠️ 解析フレームがほぼ真っ黒です。動画が正しくデコードできていない可能性があります。重いProRes/Log/4K動画はH.264・1080p以下に変換し、5〜10秒に切り出してから試してください。', 'warn');
+    }
     const n = Math.min(bData.data.length, aData.data.length) / 4;
     for (let p = 0; p < n; p++) {
       const o = p * 4;
