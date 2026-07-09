@@ -127,14 +127,15 @@
   .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
   .field { display: flex; flex-direction: column; gap: 4px; }
   .field label { font-size: 11px; color: var(--sub); }
-  .field select, .field input[type="number"] {
+  .field select, .field input[type="number"], .field input[type="text"] {
     background: var(--panel2);
     border: 1px solid var(--border);
     color: var(--text);
     border-radius: 6px;
     padding: 8px;
-    font-size: 13px;
+    font-size: 16px; /* 16px未満だとiOSがフォーカス時に画面をズームしてしまう */
     -webkit-appearance: none;
+    width: 100%;
   }
 
   .hint { font-size: 10.5px; color: var(--sub); line-height: 1.6; margin-top: 8px; }
@@ -159,7 +160,10 @@
 
   .preview-row { display: flex; gap: 10px; margin-top: 10px; }
   .preview-slot { flex: 1; min-width: 0; text-align: center; }
-  .preview-slot canvas { width: 100%; border-radius: 8px; background: #000; display: block; }
+  .preview-slot canvas {
+    width: 100%; max-height: 40vh; object-fit: contain;
+    border-radius: 8px; background: #000; display: block; margin: 0 auto;
+  }
   .preview-slot .cap { font-size: 10px; color: var(--sub); margin-top: 4px; }
 
   textarea#cubeText {
@@ -272,6 +276,7 @@
       </div>
       <div class="row" style="margin-top:12px;">
         <button class="btn accent2" id="downloadBtn">💾 .cubeをダウンロード</button>
+        <button class="btn" id="shareBtn" style="display:none;">📤 共有</button>
         <button class="btn" id="copyBtn">📋 テキストをコピー</button>
       </div>
       <textarea id="cubeText" readonly></textarea>
@@ -402,21 +407,25 @@ function seekTo(video, t) {
   return new Promise((resolve) => {
     const target = Math.min(Math.max(t, 0), Math.max(video.duration - 0.05, 0));
     let done = false;
-    const onSeeked = () => {
+    const finish = () => {
       if (done) return;
       done = true;
       video.removeEventListener('seeked', onSeeked);
       resolve();
     };
+    const onSeeked = () => {
+      // seekedはフレームがまだ画面に出る前に発火することがある（特にiOS）。
+      // requestVideoFrameCallbackで実際にフレームが提示されるまで待つ。
+      if (typeof video.requestVideoFrameCallback === 'function') {
+        video.requestVideoFrameCallback(() => finish());
+        setTimeout(finish, 1500); // rVFCが来ない場合の保険
+      } else {
+        setTimeout(finish, 60);
+      }
+    };
     video.addEventListener('seeked', onSeeked);
     video.currentTime = target;
-    // iOS Quick Look等でseekedが来ない場合のフォールバック
-    setTimeout(() => {
-      if (done) return;
-      done = true;
-      video.removeEventListener('seeked', onSeeked);
-      resolve();
-    }, 4000);
+    setTimeout(finish, 6000); // シーク自体が固まった場合の最終フォールバック
   });
 }
 
@@ -444,6 +453,18 @@ function frameAverageBrightness(imgData) {
   return count ? sum / (count * 3) : 0;
 }
 
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// 黒フレームを掴んだ場合、デコード完了待ちの可能性があるので少し待って再取得を試みる
+async function grabFrameChecked(video, width, canvas) {
+  let data = grabFrame(video, width, canvas);
+  for (let retry = 0; retry < 3 && frameAverageBrightness(data) < 2; retry++) {
+    await sleep(150 + retry * 150);
+    data = grabFrame(video, width, canvas);
+  }
+  return data;
+}
+
 /* ===================== 線形代数（4x4連立方程式） ===================== */
 function solve4(A, b) {
   // A: 4x4, b: 4  -> ガウスの消去法（部分ピボット選択）
@@ -466,65 +487,114 @@ function solve4(A, b) {
 }
 
 /* ===================== サンプル収集 ===================== */
+// 画素ペアはオブジェクトではなくUint8Arrayに詰める（1サンプル6バイト）。
+// 高精度設定だと100万ペアを超えるため、オブジェクト配列だとiPhoneでメモリ不足になる。
+const MAX_SAMPLES = 600000;
+
 async function collectSamples(beforeVideo, afterVideo, frameCount, width, startSec, durationSec) {
   const bCanvas = document.createElement('canvas');
   const aCanvas = document.createElement('canvas');
   const maxDur = Math.min(beforeVideo.duration, afterVideo.duration);
   let dur = durationSec > 0 ? Math.min(durationSec, maxDur - startSec) : (maxDur - startSec);
   if (dur <= 0) dur = maxDur;
-  const samples = [];
-  let blackFrameWarned = false;
+
+  const ratio = beforeVideo.videoHeight / beforeVideo.videoWidth || 0.5625;
+  const perFrame = width * Math.max(2, Math.round(width * ratio));
+  const stride = Math.max(1, Math.ceil((perFrame * frameCount) / MAX_SAMPLES));
+  const capacity = Math.ceil((perFrame * frameCount) / stride) + frameCount;
+  const inArr = new Uint8Array(capacity * 3);
+  const outArr = new Uint8Array(capacity * 3);
+  let count = 0, validFrames = 0, skippedFrames = 0;
+  window.__firstBeforeCanvas = null;
 
   for (let i = 0; i < frameCount; i++) {
     const frac = frameCount === 1 ? 0 : i / (frameCount - 1);
     const t = startSec + dur * frac;
     log(`フレーム解析中 ${i + 1}/${frameCount}（${t.toFixed(2)}秒）...`, 'sub');
     await Promise.all([seekTo(beforeVideo, t), seekTo(afterVideo, t)]);
-    const bData = grabFrame(beforeVideo, width, bCanvas);
-    const aData = grabFrame(afterVideo, width, aCanvas);
-    if (!blackFrameWarned && (frameAverageBrightness(bData) < 2 || frameAverageBrightness(aData) < 2)) {
-      blackFrameWarned = true;
-      log('⚠️ 解析フレームがほぼ真っ黒です。動画が正しくデコードできていない可能性があります。重いProRes/Log/4K動画はH.264・1080p以下に変換し、5〜10秒に切り出してから試してください。', 'warn');
+    const bData = await grabFrameChecked(beforeVideo, width, bCanvas);
+    const aData = await grabFrameChecked(afterVideo, width, aCanvas);
+
+    if (frameAverageBrightness(bData) < 2 || frameAverageBrightness(aData) < 2) {
+      skippedFrames++;
+      log(`⚠️ ${t.toFixed(2)}秒のフレームがほぼ真っ黒のためスキップしました`, 'warn');
+      continue;
     }
+    validFrames++;
+
     const n = Math.min(bData.data.length, aData.data.length) / 4;
-    for (let p = 0; p < n; p++) {
-      const o = p * 4;
-      samples.push({
-        inR: bData.data[o], inG: bData.data[o + 1], inB: bData.data[o + 2],
-        outR: aData.data[o], outG: aData.data[o + 1], outB: aData.data[o + 2],
-      });
+    for (let p = 0; p < n; p += stride) {
+      const o = p * 4, d = count * 3;
+      inArr[d] = bData.data[o];  inArr[d + 1] = bData.data[o + 1];  inArr[d + 2] = bData.data[o + 2];
+      outArr[d] = aData.data[o]; outArr[d + 1] = aData.data[o + 1]; outArr[d + 2] = aData.data[o + 2];
+      count++;
     }
-    if (i === 0) {
-      // 解析開始フレームをプレビュー用に保存
+
+    if (!window.__firstBeforeCanvas) {
+      // 最初の有効フレームをプレビュー用に保存
       window.__firstBeforeCanvas = document.createElement('canvas');
       window.__firstBeforeCanvas.width = bCanvas.width;
       window.__firstBeforeCanvas.height = bCanvas.height;
       window.__firstBeforeCanvas.getContext('2d').drawImage(bCanvas, 0, 0);
     }
   }
-  log(`合計 ${samples.length} 画素ペアを収集しました`, 'ok');
-  return samples;
+
+  if (validFrames === 0) {
+    throw new Error('すべての解析フレームが真っ黒でした。動画をデコードできていません。動画をH.264・1080p以下・5〜10秒に変換してから再度お試しください。');
+  }
+  if (skippedFrames > 0) {
+    log(`${skippedFrames}/${frameCount} フレームをスキップしました（残り${validFrames}フレームで解析します）`, 'warn');
+  }
+  log(`合計 ${count} 画素ペアを収集しました`, 'ok');
+  return { inArr, outArr, count };
 }
 
 /* ===================== アフィン行列フィッティング ===================== */
-function fitAffine(samples) {
+function sampleResidual(matrix, inArr, outArr, idx) {
+  const d = idx * 3;
+  const pred = applyAffine(matrix, inArr[d] / 255, inArr[d + 1] / 255, inArr[d + 2] / 255);
+  return Math.abs(pred[0] - outArr[d] / 255)
+       + Math.abs(pred[1] - outArr[d + 1] / 255)
+       + Math.abs(pred[2] - outArr[d + 2] / 255);
+}
+
+function solveAffine(inArr, outArr, count, rejectMatrix, rejectThr) {
   const ATA = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]];
   const ATyR = [0,0,0,0], ATyG = [0,0,0,0], ATyB = [0,0,0,0];
-  for (const s of samples) {
-    const x = [s.inR / 255, s.inG / 255, s.inB / 255, 1];
+  let used = 0;
+  for (let i = 0; i < count; i++) {
+    if (rejectMatrix && sampleResidual(rejectMatrix, inArr, outArr, i) > rejectThr) continue;
+    used++;
+    const d = i * 3;
+    const x = [inArr[d] / 255, inArr[d + 1] / 255, inArr[d + 2] / 255, 1];
+    const yR = outArr[d] / 255, yG = outArr[d + 1] / 255, yB = outArr[d + 2] / 255;
     for (let r = 0; r < 4; r++) {
       for (let c = 0; c < 4; c++) ATA[r][c] += x[r] * x[c];
-      ATyR[r] += x[r] * (s.outR / 255);
-      ATyG[r] += x[r] * (s.outG / 255);
-      ATyB[r] += x[r] * (s.outB / 255);
+      ATyR[r] += x[r] * yR;
+      ATyG[r] += x[r] * yG;
+      ATyB[r] += x[r] * yB;
     }
   }
+  if (used < 100) return null;
   // 数値安定化のための微小正則化
   for (let i = 0; i < 4; i++) ATA[i][i] += 1e-6;
-  const mR = solve4(ATA, ATyR);
-  const mG = solve4(ATA, ATyG);
-  const mB = solve4(ATA, ATyB);
-  return [mR, mG, mB]; // 各 [a, b, c, d] で out = a*R+b*G+c*B+d（0-1スケール）
+  return [solve4(ATA, ATyR), solve4(ATA, ATyG), solve4(ATA, ATyB)];
+}
+
+// 2パスのロバストフィット：1回フィットした後、残差が大きいサンプル
+// （Before/Afterで動きがズレた部分など）を除外して再フィットする
+function fitAffine(inArr, outArr, count) {
+  const pass1 = solveAffine(inArr, outArr, count, null, 0);
+  if (!pass1) throw new Error('サンプル数が不足しています');
+
+  const strideR = Math.max(1, Math.floor(count / 20000));
+  let sum = 0, n = 0;
+  for (let i = 0; i < count; i += strideR) { sum += sampleResidual(pass1, inArr, outArr, i); n++; }
+  const meanResidual = n ? sum / n : 0;
+  const thr = Math.max(0.06, meanResidual * 2.5);
+
+  const pass2 = solveAffine(inArr, outArr, count, pass1, thr);
+  return pass2 || pass1; // 除外しすぎた場合はパス1の結果を使う
 }
 
 function applyAffine(matrix, r01, g01, b01) {
@@ -537,14 +607,15 @@ function applyAffine(matrix, r01, g01, b01) {
 }
 
 /* ===================== チャンネル別トーンカーブ補正 ===================== */
-function fitCurves(samples, matrix) {
+function fitCurves(inArr, outArr, count, matrix) {
   const BINS = 256;
   const sums = [new Float64Array(BINS), new Float64Array(BINS), new Float64Array(BINS)];
   const counts = [new Float64Array(BINS), new Float64Array(BINS), new Float64Array(BINS)];
 
-  for (const s of samples) {
-    const pred = applyAffine(matrix, s.inR / 255, s.inG / 255, s.inB / 255);
-    const actual = [s.outR / 255, s.outG / 255, s.outB / 255];
+  for (let i = 0; i < count; i++) {
+    const d = i * 3;
+    const pred = applyAffine(matrix, inArr[d] / 255, inArr[d + 1] / 255, inArr[d + 2] / 255);
+    const actual = [outArr[d] / 255, outArr[d + 1] / 255, outArr[d + 2] / 255];
     for (let c = 0; c < 3; c++) {
       let bin = Math.round(pred[c] * (BINS - 1));
       bin = Math.min(BINS - 1, Math.max(0, bin));
@@ -576,7 +647,15 @@ function fitCurves(samples, matrix) {
     }
     if (lastIdx === -1) { for (let i = 0; i < BINS; i++) curve[i] = i / (BINS - 1); }
     else if (lastIdx < BINS - 1) for (let k = lastIdx + 1; k < BINS; k++) curve[k] = lastVal;
-    curves.push(curve);
+
+    // ビンごとのノイズをならすため軽く平滑化（±2ビンの移動平均）
+    const smoothed = new Float64Array(BINS);
+    for (let i = 0; i < BINS; i++) {
+      let s = 0, m = 0;
+      for (let k = Math.max(0, i - 2); k <= Math.min(BINS - 1, i + 2); k++) { s += curve[k]; m++; }
+      smoothed[i] = s / m;
+    }
+    curves.push(smoothed);
   }
   return curves;
 }
@@ -651,6 +730,8 @@ runBtn.addEventListener('click', async () => {
     return;
   }
   runBtn.disabled = true;
+  const originalLabel = runBtn.textContent;
+  runBtn.textContent = '⏳ 処理中…';
   document.getElementById('resultBlock').style.display = 'none';
 
   try {
@@ -663,13 +744,39 @@ runBtn.addEventListener('click', async () => {
 
     log(`設定: LUTサイズ=${lutSize}, フレーム数=${frameCount}, 解析幅=${analyzeWidth}px, 開始=${startSec}秒, 長さ=${durationSec || '全体'}秒`);
 
-    const samples = await collectSamples(state.beforeVideo, state.afterVideo, frameCount, analyzeWidth, startSec, durationSec);
-    if (samples.length === 0) throw new Error('画素サンプルを取得できませんでした');
+    const durDiff = Math.abs(state.beforeVideo.duration - state.afterVideo.duration);
+    if (durDiff > 0.75) {
+      log(`⚠️ Before(${state.beforeVideo.duration.toFixed(1)}秒)とAfter(${state.afterVideo.duration.toFixed(1)}秒)の長さが違います。開始位置がズレているとLUTの精度が落ちます。`, 'warn');
+    }
+    const bRatio = state.beforeVideo.videoHeight / state.beforeVideo.videoWidth;
+    const aRatio = state.afterVideo.videoHeight / state.afterVideo.videoWidth;
+    if (Math.abs(bRatio - aRatio) > 0.02) {
+      log('⚠️ Before/Afterのアスペクト比が異なります。同じ画角の書き出しを使ってください。', 'warn');
+    }
+
+    const { inArr, outArr, count } = await collectSamples(state.beforeVideo, state.afterVideo, frameCount, analyzeWidth, startSec, durationSec);
+    if (count === 0) throw new Error('画素サンプルを取得できませんでした');
 
     log('カラー変換（アフィン行列）を計算中...', 'sub');
-    const matrix = fitAffine(samples);
+    const matrix = fitAffine(inArr, outArr, count);
     log('トーンカーブ補正を計算中...', 'sub');
-    const curves = fitCurves(samples, matrix);
+    const curves = fitCurves(inArr, outArr, count, matrix);
+
+    // フィット品質を測って報告（変換後とAfter実測の平均誤差）
+    const strideQ = Math.max(1, Math.floor(count / 20000));
+    let errSum = 0, errN = 0;
+    for (let i = 0; i < count; i += strideQ) {
+      const d = i * 3;
+      const [tr, tg, tb] = transformPixel(matrix, curves, inArr[d] / 255, inArr[d + 1] / 255, inArr[d + 2] / 255);
+      errSum += Math.abs(tr - outArr[d] / 255) + Math.abs(tg - outArr[d + 1] / 255) + Math.abs(tb - outArr[d + 2] / 255);
+      errN += 3;
+    }
+    const mae255 = (errSum / errN) * 255;
+    if (mae255 > 20) {
+      log(`⚠️ フィット精度: 平均誤差 ${mae255.toFixed(1)}/255 — 大きめです。Before/Afterのタイミングずれ、または部分補正（肌だけ・空だけ等）が含まれている可能性があります。`, 'warn');
+    } else {
+      log(`フィット精度: 平均誤差 ${mae255.toFixed(1)}/255`, 'ok');
+    }
 
     log(`3D LUT (${lutSize}x${lutSize}x${lutSize}) を構築中...`, 'sub');
     const cubeText = buildCube(lutSize, matrix, curves, title);
@@ -677,12 +784,14 @@ runBtn.addEventListener('click', async () => {
     document.getElementById('cubeText').value = cubeText;
     renderPreview(matrix, curves);
     document.getElementById('resultBlock').style.display = 'block';
+    maybeShowShareButton();
     log('LUT作成が完了しました。ダウンロードできます。', 'ok');
   } catch (e) {
     log('エラー: ' + (e && e.message ? e.message : e), 'err');
     console.error(e);
   } finally {
     runBtn.disabled = false;
+    runBtn.textContent = originalLabel;
   }
 });
 
@@ -695,7 +804,7 @@ document.getElementById('downloadBtn').addEventListener('click', () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = (document.getElementById('lutTitle').value || 'lut').replace(/[^\w\-]+/g, '_') + '.cube';
+    a.download = cubeFileName();
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -703,6 +812,32 @@ document.getElementById('downloadBtn').addEventListener('click', () => {
     log('ダウンロードを開始しました', 'ok');
   } catch (e) {
     log('ダウンロードに失敗しました。下のテキストを長押しでコピーして .cube として保存してください', 'warn');
+  }
+});
+
+function cubeFileName() {
+  return (document.getElementById('lutTitle').value || 'lut').replace(/[^\w\-]+/g, '_') + '.cube';
+}
+
+// iOSではファイル保存より共有シートの方が扱いやすいので、対応端末では共有ボタンを出す
+function maybeShowShareButton() {
+  try {
+    const f = new File(['test'], 'test.cube', { type: 'text/plain' });
+    if (navigator.canShare && navigator.canShare({ files: [f] })) {
+      document.getElementById('shareBtn').style.display = '';
+    }
+  } catch (e) { /* File非対応環境では非表示のまま */ }
+}
+
+document.getElementById('shareBtn').addEventListener('click', async () => {
+  const text = document.getElementById('cubeText').value;
+  if (!text) return;
+  try {
+    const f = new File([text], cubeFileName(), { type: 'text/plain' });
+    await navigator.share({ files: [f], title: cubeFileName() });
+    log('共有シートを開きました', 'ok');
+  } catch (e) {
+    if (e && e.name !== 'AbortError') log('共有に失敗しました。ダウンロードかコピーをお使いください', 'warn');
   }
 });
 
