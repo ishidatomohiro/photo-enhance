@@ -95,6 +95,11 @@ python3 prores-autograde/make-lut.py -o live.cube --preset live
 iPhone で編集したい場合は「PCで下処理＆ProRes書き出し → その素材＋live.cube を iPhone の
 LumaFusion に渡してカット編集」という分担を勧める（WORKFLOWS.md の D 項）。
 
+DaVinci Resolve で本格的に自動化したい場合は `resolve-autograde.py`（＋ `run-resolve.command`）
+を案内する。取り込み〜ルック適用〜ProRes書き出しを API で自動化できる。ただし自動カラーバランスや
+強力なノイズ除去は Resolve API では扱えないため、その下処理は autograde.sh で先に済ませてから
+Resolve に渡す分担にする。
+
 ### 8. 結果の報告
 処理したファイル、各クリップに適用した判断（denoise/dehaze/strength/profile/解像度）を
 表で提示する。1 本試した段階でユーザーに仕上がり確認を促すと安全。

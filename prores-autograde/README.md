@@ -7,13 +7,26 @@
 > ⚠️ このスクリプトは**あなたのPC上（ローカル）で実行**します。ffmpeg が必須です。
 > リモート環境やブラウザ内では ProRes を扱えないため、この形にしています。
 
-## 2つの使い方
+## 使い方いろいろ
 
 - **A. Claude Code スキルとして（推奨・おまかせ）** — `.claude/skills/prores-grade/`。
   Claude が各クリップを ffprobe で解析し、**サンプルフレームを実際に見て**ノイズ/モヤ/露出を
   判断し、最適なパラメータでこのスクリプトを自動実行します。「ライブ素材を綺麗にして書き出して」
   のように頼むだけで、クリップごとに判断して処理します。
-- **B. スクリプトを直接実行** — パラメータを自分で指定して回すシンプルな使い方（本README）。
+- **B. スクリプト（ffmpeg）を直接実行** — パラメータを自分で指定して回す（本README）。
+- **C. DaVinci Resolve で自動化** — `resolve-autograde.py` ＋ `run-resolve.command`。
+  取り込み→ルックLUT/CDL適用→ProRes書き出しを Resolve の Python API で自動運転。
+- **他アプリ / iPhone へ渡す** — `make-lut.py` で `.cube` LUT を生成。Premiere・Resolve・
+  iPhone(LumaFusion) 共通で使える。→ 詳細は **`WORKFLOWS.md`**。
+
+### このフォルダの中身
+| ファイル | 役割 |
+|---------|------|
+| `autograde.sh` | ffmpeg エンジン（色補正・ノイズ除去・モヤ取り・ProRes書き出し） |
+| `make-lut.py` | ルックを `.cube` LUT に書き出す（PC/iPhone 共通で使える） |
+| `resolve-autograde.py` | DaVinci Resolve 自動運転（取り込み〜ProRes書き出し） |
+| `run-resolve.command` | 上を Mac で動かすランチャー（環境変数を自動設定） |
+| `WORKFLOWS.md` | 環境別（PC/Premiere/Resolve/iPhone）の手順 |
 
 ## 出力形式の自動判定（`--profile auto` / 既定）
 

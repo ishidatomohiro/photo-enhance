@@ -41,6 +41,29 @@ python3 make-lut.py -o live.cube --preset live
 
 ## C. DaVinci Resolve（グレーディング本命・無料版可）
 
+### C-1. 全自動（Python API・推奨）
+`resolve-autograde.py` が「取り込み → ルック(LUT/CDL)適用 → ProRes 書き出し」を自動化します。
+Apple Silicon Mac なら ProRes はハード処理で軽快に回ります。
+
+準備（初回のみ）:
+1. DaVinci Resolve を起動 → 環境設定 → システム → 一般 →
+   **「ローカル/ネットワークからの外部スクリプトを使用」を有効**にする。
+
+実行:
+```bash
+# まずルックLUTを用意（任意）
+python3 make-lut.py -o ~/LUTs/live.cube --preset live
+# Resolve を起動した状態で、ランチャー経由で実行
+./run-resolve.command /Volumes/HDD/live -o ~/Movies/graded --lut ~/LUTs/live.cube -p hq
+```
+`run-resolve.command` が Resolve のスクリプティング環境変数を設定して起動します。
+
+> API の制約: クリップ内容を見た**自動カラーバランス**や強力な**時間ノイズ除去**は
+> API から自動化できません（NR は Studio 版・GUI 寄り）。そこは **先に autograde.sh(ffmpeg)
+> で露出補正・ノイズ除去・モヤ取りを済ませてから** Resolve でルック＋ProRes書き出し、
+> という分担が最も確実です。
+
+### C-2. 手動（GUI）
 1. `make-lut.py` で作った `.cube` を Resolve の LUT フォルダに置く
    （プロジェクト設定 →「カラーマネジメント」→「LUT フォルダを開く」）。
 2. Resolve を再起動 →「Color」ページでノードを右クリック →「LUT」→ 生成した LUT。
