@@ -83,7 +83,19 @@ prores-autograde/autograde.sh \
 - 傾向がバラバラなら、似たクリップごとにパラメータを変えて分けて実行する。
 - 大量処理では `-j <N>` で並列化（N はコア数の半分程度から）。
 
-### 7. 結果の報告
+### 7. （任意）ルックを LUT に焼いて他環境へ渡す
+ユーザーが Premiere / DaVinci / **iPhone(LumaFusion)** でも同じ色を使いたい場合は、
+`make-lut.py` で `.cube` を生成して渡す。LUT はルック（色）を1ファイルに焼いたもので、
+全環境共通で使える。ただし**露出の自動補正やノイズ/モヤ除去は LUT に焼けない**ため、
+それらは autograde.sh / NLE 側の処理として案内する（詳細は `prores-autograde/WORKFLOWS.md`）。
+```bash
+python3 prores-autograde/make-lut.py -o live.cube --preset live
+# 目視判断に合わせて微調整も可: --contrast 1.10 --saturation 1.18 --temp 0.05 など
+```
+iPhone で編集したい場合は「PCで下処理＆ProRes書き出し → その素材＋live.cube を iPhone の
+LumaFusion に渡してカット編集」という分担を勧める（WORKFLOWS.md の D 項）。
+
+### 8. 結果の報告
 処理したファイル、各クリップに適用した判断（denoise/dehaze/strength/profile/解像度）を
 表で提示する。1 本試した段階でユーザーに仕上がり確認を促すと安全。
 
